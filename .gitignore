@@ -4,9 +4,13 @@
 # VSCode settings directory
 .vscode
 
+# IntelliJ IDEA project settings
+.idea
+
 # Generated reports
 .coverage
 coverage.xml
+cobertura.xml
 testLog.xml
 
 # Caches
@@ -17,6 +21,7 @@ __pycache__
 generated_prompt.md
 test_results.html
 run.log
+*.db
 
 # PyInstaller Generated files
 /build/

@@ -1,16 +1,19 @@
+from wandb.sdk.data_types.trace_tree import Trace
+import datetime
+import json
 import logging
 import os
 import re
-import time
-import json
-from cover_agent.Runner import Runner
+
+from cover_agent.AICaller import AICaller
 from cover_agent.CoverageProcessor import CoverageProcessor
 from cover_agent.CustomLogger import CustomLogger
-from cover_agent.PromptBuilder import PromptBuilder
-from cover_agent.AICaller import AICaller
 from cover_agent.FilePreprocessor import FilePreprocessor
-from cover_agent.utils import load_yaml
+from cover_agent.PromptBuilder import PromptBuilder
+from cover_agent.Runner import Runner
 from cover_agent.settings.config_loader import get_settings
+from cover_agent.settings.token_handling import clip_tokens, TokenEncoder
+from cover_agent.utils import load_yaml
 
 
 class UnitTestGenerator:
@@ -25,8 +28,9 @@ class UnitTestGenerator:
         test_command_dir: str = os.getcwd(),
         included_files: list = None,
         coverage_type="cobertura",
-        desired_coverage: int = 90,  # Default to 90% coverage if not specified
         additional_instructions: str = "",
+        use_report_coverage_feature_flag: bool = False,
+        project_root: str = "",
     ):
         """
         Initialize the UnitTestGenerator class with the provided parameters.
@@ -43,21 +47,27 @@ class UnitTestGenerator:
             coverage_type (str, optional): The type of coverage report. Defaults to "cobertura".
             desired_coverage (int, optional): The desired coverage percentage. Defaults to 90.
             additional_instructions (str, optional): Additional instructions for test generation. Defaults to an empty string.
+            use_report_coverage_feature_flag (bool, optional): Setting this to True considers the coverage of all the files in the coverage report. 
+                                                               This means we consider a test as good if it increases coverage for a different 
+                                                               file other than the source file. Defaults to False.
 
         Returns:
             None
         """
         # Class variables
+        self.project_root = project_root
         self.source_file_path = source_file_path
         self.test_file_path = test_file_path
         self.code_coverage_report_path = code_coverage_report_path
         self.test_command = test_command
         self.test_command_dir = test_command_dir
-        self.included_files = self.get_included_files(included_files)
+        self.included_files = self.get_included_files(included_files, project_root)
         self.coverage_type = coverage_type
-        self.desired_coverage = desired_coverage
         self.additional_instructions = additional_instructions
         self.language = self.get_code_language(source_file_path)
+        self.use_report_coverage_feature_flag = use_report_coverage_feature_flag
+        self.last_coverage_percentages = {}
+        self.llm_model = llm_model
 
         # Objects to instantiate
         self.ai_caller = AICaller(model=llm_model, api_base=api_base)
@@ -67,11 +77,24 @@ class UnitTestGenerator:
 
         # States to maintain within this class
         self.preprocessor = FilePreprocessor(self.test_file_path)
-        self.failed_test_runs = []
+        self.total_input_token_count = 0
+        self.total_output_token_count = 0
+        self.testing_framework = "Unknown"
+        self.code_coverage_report = ""
 
-        # Run coverage and build the prompt
-        self.run_coverage()
-        self.prompt = self.build_prompt()
+        # Read self.source_file_path into a string
+        with open(self.source_file_path, "r") as f:
+            self.source_code = f.read()
+
+    # def build_prompt(self, failed_test_runs):
+    #     """
+    #     Run code coverage and build the prompt to be used for generating tests.
+
+    #     Returns:
+    #         None
+    #     """
+    #     # Run coverage and build the prompt
+    #     self.prompt = self.build_prompt(failed_test_runs=failed_test_runs)
 
     def get_code_language(self, source_file_path):
         """
@@ -108,82 +131,37 @@ class UnitTestGenerator:
         # Return the language name in lowercase
         return language_name.lower()
 
-    def run_coverage(self):
-        """
-        Perform an initial build/test command to generate coverage report and get a baseline.
-
-        Parameters:
-        - None
-
-        Returns:
-        - None
-        """
-        # Perform an initial build/test command to generate coverage report and get a baseline
-        self.logger.info(
-            f'Running build/test command to generate coverage report: "{self.test_command}"'
-        )
-        stdout, stderr, exit_code, time_of_test_command = Runner.run_command(
-            command=self.test_command, cwd=self.test_command_dir
-        )
-        assert (
-            exit_code == 0
-        ), f'Fatal: Error running test command. Are you sure the command is correct? "{self.test_command}"\nExit code {exit_code}. \nStdout: \n{stdout} \nStderr: \n{stderr}'
-
-        # Instantiate CoverageProcessor and process the coverage report
-        coverage_processor = CoverageProcessor(
-            file_path=self.code_coverage_report_path,
-            filename=os.path.basename(self.source_file_path),
-            coverage_type=self.coverage_type,
-        )
-
-        # Use the process_coverage_report method of CoverageProcessor, passing in the time the test command was executed
-        try:
-            lines_covered, lines_missed, percentage_covered = (
-                coverage_processor.process_coverage_report(
-                    time_of_test_command=time_of_test_command
-                )
-            )
-
-            # Process the extracted coverage metrics
-            self.current_coverage = percentage_covered
-            self.code_coverage_report = f"Lines covered: {lines_covered}\nLines missed: {lines_missed}\nPercentage covered: {round(percentage_covered * 100, 2)}%"
-        except AssertionError as error:
-            # Handle the case where the coverage report does not exist or was not updated after the test command
-            self.logger.error(f"Error in coverage processing: {error}")
-            # Optionally, re-raise the error or handle it as deemed appropriate for your application
-            raise
-        except (ValueError, NotImplementedError) as e:
-            # Handle errors related to unsupported coverage report types or issues in parsing
-            self.logger.warning(f"Error parsing coverage report: {e}")
-            self.logger.info(
-                "Will default to using the full coverage report. You will need to check coverage manually for each passing test."
-            )
-            with open(self.code_coverage_report_path, "r") as f:
-                self.code_coverage_report = f.read()
-
     @staticmethod
-    def get_included_files(included_files):
-        """
-        A method to read and concatenate the contents of included files into a single string.
-
-        Parameters:
-            included_files (list): A list of paths to included files.
-
-        Returns:
-            str: A string containing the concatenated contents of the included files, or an empty string if the input list is empty.
-        """
+    def get_included_files(included_files: list, project_root: str = "", disable_tokens=False) -> str:
         if included_files:
             included_files_content = []
+            file_names_rel = []
             for file_path in included_files:
                 try:
                     with open(file_path, "r") as file:
                         included_files_content.append(file.read())
+                        file_path_rel = os.path.relpath(file_path, project_root) if project_root else file_path
+                        file_names_rel.append(file_path_rel)
                 except IOError as e:
                     print(f"Error reading file {file_path}: {str(e)}")
-            return "\n".join(included_files_content) if included_files_content else None
+            out_str = ""
+            if included_files_content:
+                for i, content in enumerate(included_files_content):
+                    out_str += (
+                        f"file_path: `{file_names_rel[i]}`\ncontent:\n```\n{content}\n```\n\n\n"
+                    )
+
+            out_str = out_str.strip()
+            if not disable_tokens and get_settings().get("include_files.limit_tokens", False):
+                encoder = TokenEncoder.get_token_encoder()
+                num_input_tokens = len(encoder.encode(out_str))
+                if num_input_tokens > get_settings().get("include_files.max_tokens"):
+                    print(f"Clipping included files content from {num_input_tokens} to {get_settings().get('include_files.max_tokens')} tokens")
+                    out_str = clip_tokens(out_str, get_settings().get("include_files.max_tokens"), num_input_tokens=num_input_tokens)
+            return out_str
         return ""
 
-    def build_prompt(self):
+    def build_prompt(self, failed_test_runs, language, testing_framework, code_coverage_report) -> dict:
         """
         Builds a prompt using the provided information to be used for generating tests.
 
@@ -195,75 +173,74 @@ class UnitTestGenerator:
             str: The generated prompt to be used for test generation.
         """
         # Check for existence of failed tests:
-        if not self.failed_test_runs:
+        if not failed_test_runs:
             failed_test_runs_value = ""
         else:
             failed_test_runs_value = ""
             try:
-                for failed_test in self.failed_test_runs:
-                    code = failed_test['code'].strip()
-                    if 'error_message' in failed_test:
-                        error_message = failed_test['error_message']
-                    else:
-                        error_message = None
+                for failed_test in failed_test_runs:
+                    failed_test_dict = failed_test.get("code", {})
+                    if not failed_test_dict:
+                        continue
+                    # dump dict to str
+                    code = json.dumps(failed_test_dict)
+                    error_message = failed_test.get("error_message", None)
                     failed_test_runs_value += f"Failed Test:\n```\n{code}\n```\n"
                     if error_message:
-                        failed_test_runs_value += f"Error message for test above:\n{error_message}\n\n\n"
+                        failed_test_runs_value += (
+                            f"Test execution error analysis:\n{error_message}\n\n\n"
+                        )
+                    else:
+                        failed_test_runs_value += "\n\n"
             except Exception as e:
                 self.logger.error(f"Error processing failed test runs: {e}")
                 failed_test_runs_value = ""
-        self.failed_test_runs = []  # Reset the failed test runs. we don't want a list which grows indefinitely, and will take all the prompt tokens
 
         # Call PromptBuilder to build the prompt
-        prompt = PromptBuilder(
+        self.prompt_builder = PromptBuilder(
             source_file_path=self.source_file_path,
             test_file_path=self.test_file_path,
-            code_coverage_report=self.code_coverage_report,
+            code_coverage_report=code_coverage_report,
             included_files=self.included_files,
             additional_instructions=self.additional_instructions,
             failed_test_runs=failed_test_runs_value,
-            language=self.language,
+            language=language,
+            testing_framework=testing_framework,
+            project_root=self.project_root,
         )
 
-        return prompt.build_prompt()
+        return self.prompt_builder.build_prompt()
 
-    def generate_tests(self, max_tokens=4096, dry_run=False):
+    def generate_tests(self, failed_test_runs, language, testing_framework, code_coverage_report):
         """
-        Generate test cases using the AI model based on the provided prompt.
+        Generate tests using the AI model based on the constructed prompt.
 
-        This method generates test cases by calling the AI model with the constructed prompt.
-        If 'dry_run' is set to True, placeholder test cases are returned.
-        Otherwise, the AI model is invoked with the prompt to generate actual test cases.
-        The method logs the total token count used by the language model.
+        This method generates tests by calling the AI model with the constructed prompt.
+        It handles both dry run and actual test generation scenarios. In a dry run, it returns canned test responses.
+        In the actual run, it calls the AI model with the prompt and processes the response to extract test
+        information such as test tags, test code, test name, and test behavior.
 
         Parameters:
             max_tokens (int, optional): The maximum number of tokens to use for generating tests. Defaults to 4096.
-            dry_run (bool, optional): If True, placeholder test cases are returned without invoking the AI model. Defaults to False.
 
         Returns:
-            list: A list of generated test cases as strings.
-            If an error occurs during test generation, an empty list is returned, and the error is recorded in the 'failed_test_runs' attribute.
+            dict: A dictionary containing the generated tests with test tags, test code, test name, and test behavior. If an error occurs during test generation, an empty dictionary is returned.
+
+        Raises:
+            Exception: If there is an error during test generation, such as a parsing error while processing the AI model response.
         """
-        self.prompt = self.build_prompt()
+        self.prompt = self.build_prompt(failed_test_runs, language, testing_framework, code_coverage_report)
+        response, prompt_token_count, response_token_count =  self.ai_caller.call_model(prompt=self.prompt)
 
-        if dry_run:
-            response = "```def test_something():\n    pass```\n```def test_something_else():\n    pass```\n```def test_something_different():\n    pass```"
-        else:
-            response, prompt_token_count, response_token_count = (
-                self.ai_caller.call_model(prompt=self.prompt, max_tokens=max_tokens)
-            )
-        self.logger.info(
-            f"Total token used count for LLM model {self.ai_caller.model}: {prompt_token_count + response_token_count}"
-        )
-
+        self.total_input_token_count += prompt_token_count
+        self.total_output_token_count += response_token_count
         try:
             tests_dict = load_yaml(
                 response,
                 keys_fix_yaml=["test_tags", "test_code", "test_name", "test_behavior"],
             )
             if tests_dict is None:
-                raise ValueError("Failed to parse tests from YAML")
-            tests_list = [t["test_code"].rstrip() for t in tests_dict["tests"]]
+                return {}
         except Exception as e:
             self.logger.error(f"Error during test generation: {e}")
             # Record the error as a failed test attempt
@@ -276,151 +253,22 @@ class UnitTestGenerator:
                 "test": response,  # Use the response that led to the error
             }
             # self.failed_test_runs.append(fail_details)
-            tests_list = []  # Return an empty list or handle accordingly
+            tests_dict = []
 
-        return tests_list
+        return tests_dict
 
-    def validate_test(self, generated_test: str):
-        """
-        Validate a single generated test case by running it and checking coverage.
-
-        This function appends the generated test to the test file, runs it, and checks the output.
-        If the test fails or does not increase coverage, it rolls back changes and records the failure.
-
-        Parameters:
-            generated_test (str): The test code to validate.
-
-        Returns:
-            dict: A dictionary containing the test result status, reason for failure (if any),
-                stdout, stderr, exit code, and the test itself.
-        """
-        # Step 0: Run the test through the preprocessor rule set
-        # processed_test = self.preprocessor.process_file(generated_test)
-
-        # Step 0: no pre-process.
-        # We asked the model that each generated test should be a self-contained independent test
-        processed_test = generated_test.strip('\n')
-
-        # Step 1: Append the generated test to the test file and save the original content
-        with open(self.test_file_path, "r+") as test_file:
-            original_content = test_file.read()  # Store original content
-            test_file.write(
-                "\n"
-                + ("\n" if not original_content.endswith("\n") else "")
-                + processed_test
-                + "\n"
-            )  # Append the new test at the end
-
-        # Step 2: Run the test using the Runner class
-        self.logger.info(
-            f'Running test with the following command: "{self.test_command}"'
-        )
-        stdout, stderr, exit_code, time_of_test_command = Runner.run_command(
-            command=self.test_command, cwd=self.test_command_dir
-        )
-
-        # Step 3: Check for pass/fail from the Runner object
-        if exit_code != 0:
-            # Test failed, roll back the test file to its original content
-            with open(self.test_file_path, "w") as test_file:
-                test_file.write(original_content)
-            self.logger.info(f"Skipping a generated test that failed")
-            fail_details = {
-                "status": "FAIL",
-                "reason": "Test failed",
-                "exit_code": exit_code,
-                "stderr": stderr,
-                "stdout": stdout,
-                "test": generated_test,
-            }
-
-            def extract_error_message(fail_message):
-                try:
-                    # Define a regular expression pattern to match the error message
-                    MAX_LINES = 15
-                    pattern = r'={3,} FAILURES ={3,}(.*?)(={3,}|$)'
-                    match = re.search(pattern, fail_message, re.DOTALL)
-                    if match:
-                        err_str = match.group(1).strip('\n')
-                        err_str_lines = err_str.split('\n')
-                        if len(err_str_lines) > MAX_LINES:
-                            # show last MAX_lines lines
-                            err_str = '...\n' + '\n'.join(err_str_lines[-MAX_LINES:])
-                        return err_str
-                    return ""
-                except Exception as e:
-                    self.logger.error(f"Error extracting error message: {e}")
-                    return ""
-
-            error_message = extract_error_message(fail_details["stdout"])
-            if error_message:
-                logging.error(f"Error message:\n{error_message}")
-
-            self.failed_test_runs.append(
-                {'code': generated_test, 'error_message': error_message}
-            )  # Append failure details to the list
-            return fail_details
-
-        # If test passed, check for coverage increase
-        try:
-            # Step 4: Check that the coverage has increased using the CoverageProcessor class
-            new_coverage_processor = CoverageProcessor(
-                file_path=self.code_coverage_report_path,
-                filename=os.path.basename(self.source_file_path),
-                coverage_type=self.coverage_type,
-            )
-            _, _, new_percentage_covered = (
-                new_coverage_processor.process_coverage_report(
-                    time_of_test_command=time_of_test_command
-                )
-            )
-
-            if new_percentage_covered <= self.current_coverage:
-                # Coverage has not increased, rollback the test by removing it from the test file
-                with open(self.test_file_path, "w") as test_file:
-                    test_file.write(original_content)
-                self.logger.info("Test did not increase coverage. Rolling back.")
-                fail_details = {
-                    "status": "FAIL",
-                    "reason": "Coverage did not increase",
-                    "exit_code": exit_code,
-                    "stderr": stderr,
-                    "stdout": stdout,
-                    "test": generated_test,
-                }
-                self.failed_test_runs.append(
-                    {'code': fail_details["test"], 'error_message': 'did not increase code coverage'}
-                )  # Append failure details to the list
-                return fail_details
-        except Exception as e:
-            # Handle errors gracefully
-            self.logger.error(f"Error during coverage verification: {e}")
-            # Optionally, roll back even in case of error
-            with open(self.test_file_path, "w") as test_file:
-                test_file.write(original_content)
-            fail_details = {
-                "status": "FAIL",
-                "reason": "Runtime error",
-                "exit_code": exit_code,
-                "stderr": stderr,
-                "stdout": stdout,
-                "test": generated_test,
-            }
-            self.failed_test_runs.append(
-                {'code': fail_details["test"], 'error_message': 'coverage verification error'}
-            )  # Append failure details to the list
-            return fail_details
-
-        # If everything passed and coverage increased, update current coverage and log success
-        self.current_coverage = new_percentage_covered
-        self.logger.info(
-            f"Test passed and coverage increased. Current coverage: {round(new_percentage_covered * 100, 2)}%"
-        )
+    def to_dict(self):
         return {
-            "status": "PASS",
-            "reason": "",
-            "exit_code": exit_code,
-            "stderr": stderr,
-            "stdout": stdout,
-            "test": generated_test,
+            "source_file_path": self.source_file_path,
+            "test_file_path": self.test_file_path,
+            "code_coverage_report_path": self.code_coverage_report_path,
+            "test_command": self.test_command,
+            "llm_model": self.llm_model,
+            "test_command_dir": self.test_command_dir,
+            "included_files": self.included_files,
+            "coverage_type": self.coverage_type,
+            "additional_instructions": self.additional_instructions,
         }
+
+    def to_json(self):
+        return json.dumps(self.to_dict())

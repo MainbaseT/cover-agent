@@ -1,14 +1,18 @@
 import logging
+import os
 
 from jinja2 import Environment, StrictUndefined
+
+from cover_agent.AICaller import AICaller
 from cover_agent.settings.config_loader import get_settings
+from cover_agent.utils import load_yaml
 
 MAX_TESTS_PER_RUN = 4
 
 # Markdown text used as conditional appends
 ADDITIONAL_INCLUDES_TEXT = """
 ## Additional Includes
-The following is a set of included files used as context for the source code above. This is usually included libraries needed as context to write better tests:
+Here are the additional files needed to provide context for the source code:
 ======
 {included_files}
 ======
@@ -23,7 +27,7 @@ ADDITIONAL_INSTRUCTIONS_TEXT = """
 
 FAILED_TESTS_TEXT = """
 ## Previous Iterations Failed Tests
-Below is a list of failed tests that you generated in previous iterations. Do not generate the same tests again, and take the failed tests into account when generating new tests.
+Below is a list of failed tests that were generated in previous iterations. Do not generate the same tests again, and take the failed tests into account when generating new tests.
 ======
 {failed_test_runs}
 ======
@@ -31,7 +35,6 @@ Below is a list of failed tests that you generated in previous iterations. Do no
 
 
 class PromptBuilder:
-
     def __init__(
         self,
         source_file_path: str,
@@ -41,6 +44,8 @@ class PromptBuilder:
         additional_instructions: str = "",
         failed_test_runs: str = "",
         language: str = "python",
+        testing_framework: str = "NOT KNOWN",
+        project_root: str = "",
     ):
         """
         The `PromptBuilder` class is responsible for building a formatted prompt string by replacing placeholders with the actual content of files read during initialization. It takes in various paths and settings as parameters and provides a method to generate the prompt.
@@ -65,15 +70,23 @@ class PromptBuilder:
             build_prompt(self)
                 Replaces placeholders with the actual content of files read during initialization and returns the formatted prompt string.
         """
-        self.source_file_name = source_file_path.split("/")[-1]
-        self.test_file_name = test_file_path.split("/")[-1]
+        self.project_root = project_root
+        self.source_file_path = source_file_path
+        self.test_file_path = test_file_path
+        self.source_file_name_rel = os.path.relpath(source_file_path, project_root)
+        self.test_file_name_rel = os.path.relpath(test_file_path, project_root)
         self.source_file = self._read_file(source_file_path)
         self.test_file = self._read_file(test_file_path)
         self.code_coverage_report = code_coverage_report
         self.language = language
+        self.testing_framework = testing_framework
+
         # add line numbers to each line in 'source_file'. start from 1
         self.source_file_numbered = "\n".join(
-            [f"{i+1} {line}" for i, line in enumerate(self.source_file.split("\n"))]
+            [f"{i + 1} {line}" for i, line in enumerate(self.source_file.split("\n"))]
+        )
+        self.test_file_numbered = "\n".join(
+            [f"{i + 1} {line}" for i, line in enumerate(self.test_file.split("\n"))]
         )
 
         # Conditionally fill in optional sections
@@ -95,6 +108,10 @@ class PromptBuilder:
             else ""
         )
 
+        self.stdout_from_run = ""
+        self.stderr_from_run = ""
+        self.processed_test_file = ""
+
     def _read_file(self, file_path):
         """
         Helper method to read file contents.
@@ -112,19 +129,11 @@ class PromptBuilder:
             return f"Error reading {file_path}: {e}"
 
     def build_prompt(self) -> dict:
-        """
-        Replaces placeholders with the actual content of files read during initialization, and returns the formatted prompt.
-
-        Parameters:
-            None
-
-        Returns:
-            str: The formatted prompt string.
-        """
         variables = {
-            "source_file_name": self.source_file_name,
-            "test_file_name": self.test_file_name,
+            "source_file_name": self.source_file_name_rel,
+            "test_file_name": self.test_file_name_rel,
             "source_file_numbered": self.source_file_numbered,
+            "test_file_numbered": self.test_file_numbered,
             "source_file": self.source_file,
             "test_file": self.test_file,
             "code_coverage_report": self.code_coverage_report,
@@ -133,6 +142,9 @@ class PromptBuilder:
             "additional_instructions_text": self.additional_instructions,
             "language": self.language,
             "max_tests": MAX_TESTS_PER_RUN,
+            "testing_framework": self.testing_framework,
+            "stdout": self.stdout_from_run,
+            "stderr": self.stderr_from_run,
         }
         environment = Environment(undefined=StrictUndefined)
         try:
@@ -148,3 +160,70 @@ class PromptBuilder:
 
         # print(f"#### user_prompt:\n\n{user_prompt}")
         return {"system": system_prompt, "user": user_prompt}
+
+    def build_prompt_custom(self, file) -> dict:
+        """
+        Builds a custom prompt by replacing placeholders with actual content from files and settings.
+
+        Parameters:
+            file (str): The file to retrieve settings for building the prompt.
+
+        Returns:
+            dict: A dictionary containing the system and user prompts.
+        """
+        variables = {
+            "source_file_name": self.source_file_name_rel,
+            "test_file_name": self.test_file_name_rel,
+            "source_file_numbered": self.source_file_numbered,
+            "test_file_numbered": self.test_file_numbered,
+            "source_file": self.source_file,
+            "test_file": self.test_file,
+            "code_coverage_report": self.code_coverage_report,
+            "additional_includes_section": self.included_files,
+            "failed_tests_section": self.failed_test_runs,
+            "additional_instructions_text": self.additional_instructions,
+            "language": self.language,
+            "max_tests": MAX_TESTS_PER_RUN,
+            "testing_framework": self.testing_framework,
+            "stdout": self.stdout_from_run,
+            "stderr": self.stderr_from_run,
+            "processed_test_file": self.processed_test_file,
+        }
+        environment = Environment(undefined=StrictUndefined)
+        try:
+            settings = get_settings().get(file)
+            if settings is None or not hasattr(settings, "system") or not hasattr(
+                settings, "user"
+            ):
+                logging.error(f"Could not find settings for prompt file: {file}")
+                return {"system": "", "user": ""}
+            system_prompt = environment.from_string(settings.system).render(variables)
+            user_prompt = environment.from_string(settings.user).render(variables)
+        except Exception as e:
+            logging.error(f"Error rendering prompt: {e}")
+            return {"system": "", "user": ""}
+
+        return {"system": system_prompt, "user": user_prompt}
+
+
+def adapt_test_command_for_a_single_test_via_ai(args, test_file_relative_path, test_command):
+    try:
+        variables = {"project_root_dir": args.test_command_dir,
+                     "test_file_relative_path": test_file_relative_path,
+                     "test_command": test_command,
+                     }
+        ai_caller = AICaller(model=args.model)
+        environment = Environment(undefined=StrictUndefined)
+        system_prompt = environment.from_string(get_settings().adapt_test_command_for_a_single_test_via_ai.system).render(
+            variables)
+        user_prompt = environment.from_string(get_settings().adapt_test_command_for_a_single_test_via_ai.user).render(
+            variables)
+        response, prompt_token_count, response_token_count = (
+            ai_caller.call_model(prompt={"system": system_prompt, "user": user_prompt}, stream=False)
+        )
+        response_yaml = load_yaml(response)
+        new_command_line = response_yaml["new_command_line"].strip()
+        return new_command_line
+    except Exception as e:
+        logging.error(f"Error adapting test command: {e}")
+        return None

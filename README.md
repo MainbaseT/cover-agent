@@ -1,24 +1,27 @@
-<div align="center">
 
 <div align="center">
 
+# Qodo Cover
 
-<picture>
+<div align="center">
+
+<!-- <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://www.codium.ai/images/cover-agent/cover-agent-dark.png" width="330">
   <source media="(prefers-color-scheme: light)" srcset="https://www.codium.ai/images/cover-agent/cover-agent-light.png" width="330">
-  <img src="https://www.codium.ai/images/cover-agent/cover-agent-light.png" alt="logo" width="330">
+  <img src="https://www.codium.ai/images/cover-agent/cover-agent-light.png" alt="logo" width="330"> 
 
-</picture>
+</picture> -->
 <br/>
-CodiumAI Cover Agent aims to help efficiently increasing code coverage, by automatically generating qualified tests to enhance existing test suites
+Qodo Cover aims to help efficiently increase code coverage, by automatically generating qualified tests to extend code coverage. Qodo Cover can run in your GitHub CI workflow or locally as a CLI tool.
 </div>
 
-[![GitHub license](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)](https://github.com/Codium-ai/cover-agent/blob/main/LICENSE)
+[![GitHub license](https://img.shields.io/badge/License-AGPL_3.0-blue.svg)](https://github.com/qodo-ai/qodo-cover/blob/main/LICENSE)
 [![Discord](https://badgen.net/badge/icon/discord?icon=discord&label&color=purple)](https://discord.gg/cYsvFJJbdM)
-[![Twitter](https://img.shields.io/twitter/follow/codiumai)](https://twitter.com/codiumai)
+[![Twitter](https://img.shields.io/twitter/follow/qodoai)](https://twitter.com/qodoai)
     <a href="https://github.com/Codium-ai/cover-agent/commits/main">
-    <img alt="GitHub" src="https://img.shields.io/github/last-commit/Codium-ai/cover-agent/main?style=for-the-badge" height="20">
-    </a>
+    <img alt="GitHub" src="https://img.shields.io/github/last-commit/qodo-ai/qodo-cover/main?style=for-the-badge" height="20">
+    </a><br>
+    <a href="https://trendshift.io/repositories/10328" target="_blank"><img src="https://trendshift.io/api/badge/repositories/10328" alt="Codium-ai/cover-agent | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
 ## Table of Contents
@@ -30,14 +33,20 @@ CodiumAI Cover Agent aims to help efficiently increasing code coverage, by autom
 
 
 ## News and Updates
-### 2024-05-09: 
-#### This repository includes the first known implementation of TestGen-LLM, described in the paper [Automated Unit Test Improvement using Large Language Models at Meta](https://arxiv.org/abs/2402.09171).
 
-# Cover-Agent
-Welcome to Cover-Agent. This focused project utilizes Generative AI to automate and enhance the generation of tests (currently mostly unit tests), aiming to streamline development workflows. Cover-Agent can run via a terminal, and is planned to be integrated into popular CI platforms.
+### 2024-12-04:
+New mode - [Run Qodo Cover Pro in your GitHub CI workflow](https://github.com/qodo-ai/qodo-ci). Currently in preview and available for free for a limited time for Python projects, leveraging your own LLM API key from your favorite LLM provider. It's a practical way to improve code quality and reliability. For more details, reach out to the [Qodo team](https://www.qodo.ai/book-a-demo).
+
+### 2024-11-05:
+New mode - scan an entire repo, auto identify the test files, auto collect context for each test file, and extend the test suite with new tests.
+See more details [here](docs/repo_coverage.md).
+
+
+# Qodo-Cover
+Welcome to Qodo-Cover. This focused project utilizes Generative AI to automate and enhance the generation of tests (currently mostly unit tests), aiming to streamline development workflows. Qodo-Cover can run via a terminal, and is planned to be integrated into popular CI platforms.
 [![Test generation xxx](https://www.codium.ai/wp-content/uploads/2024/05/CodiumAI-CoverAgent-v240519-small-loop.gif)](https://youtu.be/fIYkSEJ4eqE?feature=shared)
 
-We invite the community to collaborate and help extend the capabilities of Cover Agent, continuing its development as a cutting-edge solution in the automated unit test generation domain. We also wish to inspire researchers to leverage this open-source tool to explore new test-generation techniques.
+We invite the community to collaborate and help extend the capabilities of Qodo Cover, continuing its development as a cutting-edge solution in the automated unit test generation domain. We also wish to inspire researchers to leverage this open-source tool to explore new test-generation techniques.
 
 
 ## Overview
@@ -60,16 +69,16 @@ If running directly from the repository you will also need:
 - Poetry installed for managing Python package dependencies. Installation instructions for Poetry can be found at [https://python-poetry.org/docs/](https://python-poetry.org/docs/).
 
 ### Standalone Runtime
-The Cover Agent can be installed as a Python Pip package or run as a standalone executable.
+Qodo Cover can be installed as a Python Pip package or run as a standalone executable.
 
 #### Python Pip
 To install the Python Pip package directly via GitHub run the following command:
-```
-pip install git+https://github.com/Codium-ai/cover-agent.git
+```shell
+pip install git+https://github.com/qodo-ai/qodo-cover.git
 ```
 
 #### Binary
-The binary can be run without any Python environment installed on your system (e.g. within a Docker container that does not contain Python). You can download the release for your system by navigating to the project's [release page](https://github.com/Codium-ai/cover-agent/releases).
+The binary can be run without any Python environment installed on your system (e.g. within a Docker container that does not contain Python). You can download the release for your system by navigating to the project's [release page](https://github.com/qodo-ai/qodo-cover/releases).
 
 ### Repository Setup
 Run the following command to install all the dependencies and run the project from source:
@@ -83,6 +92,7 @@ After downloading the executable or installing the Pip package you can run the C
 cover-agent \
   --source-file-path "<path_to_source_file>" \
   --test-file-path "<path_to_test_file>" \
+  --project-root "<path_to_project_root>" \
   --code-coverage-report-path "<path_to_coverage_report>" \
   --test-command "<test_command_to_run>" \
   --test-command-dir "<directory_to_run_test_command>" \
@@ -92,13 +102,17 @@ cover-agent \
   --included-files "<optional_list_of_files_to_include>"
 ```
 
-You can use the example projects within this repository to run this code as a test.
+You can use the example code below to try out the Cover Agent.
+(Note that the [usage_examples](docs/usage_examples.md) file provides more elaborate examples of how to use the Cover Agent)
 
-Follow the steps in the README.md file located in the `templated_tests/python_fastapi/` directory, then return to the root of the repository and run the following command to add tests to the **python fastapi** example:
+#### Python
+
+Follow the steps in the README.md file located in the `templated_tests/python_fastapi/` directory to setup an environment, then return to the root of the repository, and run the following command to add tests to the **python fastapi** example:
 ```shell
 cover-agent \
   --source-file-path "templated_tests/python_fastapi/app.py" \
   --test-file-path "templated_tests/python_fastapi/test_app.py" \
+  --project-root "templated_tests/python_fastapi" \
   --code-coverage-report-path "templated_tests/python_fastapi/coverage.xml" \
   --test-command "pytest --cov=. --cov-report=xml --cov-report=term" \
   --test-command-dir "templated_tests/python_fastapi" \
@@ -106,6 +120,8 @@ cover-agent \
   --desired-coverage 70 \
   --max-iterations 10
 ```
+
+#### Go
 
 For an example using **go** `cd` into `templated_tests/go_webservice`, set up the project following the `README.md`.
 To work with coverage reporting, you need to install `gocov` and `gocov-xml`. Run the following commands to install these tools:
@@ -126,24 +142,24 @@ cover-agent \
   --max-iterations 1
 ```
 
-Try and add more tests to this project by running this command at the root of this repository:
+#### Java
+For an example using **java** `cd` into `templated_tests/java_gradle`, set up the project following the [README.md](templated_tests/java_gradle/README.md).
+To work with jacoco coverage reporting, follow the [README.md](templated_tests/java_gradle/README.md) Requirements section:
+and then run the following command:
 ```shell
-poetry run cover-agent \
-  --source-file-path "cover_agent/main.py" \
-  --test-file-path "tests/test_main.py" \
-  --code-coverage-report-path "coverage.xml" \
-  --test-command "poetry run pytest --junitxml=testLog.xml --cov=templated_tests --cov=cover_agent --cov-report=xml --cov-report=term --log-cli-level=INFO" \
-  --coverage-type "cobertura" \
-  --desired-coverage 70 \
-  --max-iterations 1 \
-  --model "gpt-4o"
+cover-agent \
+  --source-file-path="src/main/java/com/davidparry/cover/SimpleMathOperations.java" \
+  --test-file-path="src/test/groovy/com/davidparry/cover/SimpleMathOperationsSpec.groovy" \
+  --code-coverage-report-path="build/reports/jacoco/test/jacocoTestReport.csv" \
+  --test-command="./gradlew clean test jacocoTestReport" \
+  --test-command-dir=$(pwd) \
+  --coverage-type="jacoco" \
+  --desired-coverage=70 \
+  --max-iterations=1
 ```
-
-Note: If you are using Poetry then use the `poetry run cover-agent` command instead of the `cover-agent` run command.
 
 ### Outputs
 A few debug files will be outputted locally within the repository (that are part of the `.gitignore`)
-* `generated_prompt.md`: The full prompt that is sent to the LLM
 * `run.log`: A copy of the logger that gets dumped to your `stdout`
 * `test_results.html`: A results table that contains the following for each generated test:
   * Test status
@@ -152,6 +168,9 @@ A few debug files will be outputted locally within the repository (that are part
   * `stderr`
   * `stdout`
   * Generated test
+
+### Additional logging
+If you set an environment variable `WANDB_API_KEY`, the prompts, responses, and additional information will be logged to [Weights and Biases](https://wandb.ai/).
 
 ### Using other LLMs
 This project uses LiteLLM to communicate with OpenAI and other hosted LLMs (supporting 100+ LLMs to date). To use a different model other than the OpenAI default you'll need to:
@@ -168,23 +187,30 @@ cover-agent \
   --model "vertex_ai/gemini-pro"
 ```
 
+#### OpenAI Compatible Endpoint
+```shell
+export OPENAI_API_KEY="<your api key>" # If <your-api-base> requires an API KEY, set this value.
+
+cover-agent \
+  ...
+  --model "openai/<your model name>" \
+  --api-base "<your-api-base>"
+```
+
+#### Azure OpenAI Compatible Endpoint
+```shell
+export AZURE_API_BASE="<your api base>" # azure api base
+export AZURE_API_VERSION="<your api version>" # azure api version (optional)
+export AZURE_API_KEY="<your api key>" # azure api key
+
+cover-agent \
+  ...
+  --model "azure/<your deployment name>"
+```
+
 
 ## Development
-This section discusses the development of this project.
-
-### Versioning
-Before merging to main make sure to manually increment the version number in `cover_agent/version.txt` at the root of the repository.
-
-### Running Tests
-Set up your development environment by running the `poetry install` command as you did above. 
-
-Note: for older versions of Poetry you may need to include the `--dev` option to install Dev dependencies.
-
-After setting up your environment run the following command:
-```
-poetry run pytest --junitxml=testLog.xml --cov=templated_tests --cov=cover_agent --cov-report=xml --cov-report=term --log-cli-level=INFO
-```
-This will also generate all logs and output reports that are generated in `.github/workflows/ci_pipeline.yml`.
+See [Development](docs/development.md) for more information on how to contribute to this project.
 
 ## Roadmap
 Below is the roadmap of planned features, with the current implementation status:
@@ -193,7 +219,7 @@ Below is the roadmap of planned features, with the current implementation status
   - [x] Being able to generate tests for different programming languages
   - [ ] Being able to deal with a large variety of testing scenarios
   - [ ] Generate a behavior analysis for the code under test, and generate tests accordingly
-  - [ ] Check test flakiness, e.g. by running 5 times as suggested by TestGen-LLM
+  - [x] Check test flakiness, e.g. by running 5 times as suggested by TestGen-LLM
 - [ ] Cover more test generation pains
   - [ ] Generate new tests that are focused on the PR changeset
   - [ ] Run over an entire repo/code-base and attempt to enhance all existing test suites
@@ -202,6 +228,8 @@ Below is the roadmap of planned features, with the current implementation status
   - [ ] Integrate into databases, APIs, OpenTelemetry and other sources of data to extract relevant i/o for the test generation
   - [ ] Add a setting file
 
-## CodiumAI
-CodiumAI's mission is to enable busy dev teams to increase and maintain their code integrity.
+## QodoAI
+QodoAI's mission is to enable busy dev teams to increase and maintain their code integrity.
 We offer various tools, including "Pro" versions of our open-source tools, which are meant to handle enterprise-level code complexity and are multi-repo codebase aware.
+
+**Try the pro version of [Qodo Cover in a GitHub Action](https://github.com/qodo-ai/qodo-ci)!**
